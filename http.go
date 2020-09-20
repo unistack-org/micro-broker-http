@@ -3,7 +3,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -18,15 +17,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/micro/go-micro/v3/broker"
-	"github.com/micro/go-micro/v3/codec/json"
-	merr "github.com/micro/go-micro/v3/errors"
-	"github.com/micro/go-micro/v3/registry"
-	"github.com/micro/go-micro/v3/registry/cache"
-	"github.com/micro/go-micro/v3/registry/mdns"
-	maddr "github.com/micro/go-micro/v3/util/addr"
-	mnet "github.com/micro/go-micro/v3/util/net"
-	mls "github.com/micro/go-micro/v3/util/tls"
+	"github.com/unistack-org/micro/v3/broker"
+	"github.com/unistack-org/micro/v3/codec/json"
+	merr "github.com/unistack-org/micro/v3/errors"
+	"github.com/unistack-org/micro/v3/registry"
+	maddr "github.com/unistack-org/micro/v3/util/addr"
+	mnet "github.com/unistack-org/micro/v3/util/net"
+	mls "github.com/unistack-org/micro/v3/util/tls"
 	"golang.org/x/net/http2"
 )
 
@@ -58,6 +55,12 @@ type httpSubscriber struct {
 	fn    broker.Handler
 	svc   *registry.Service
 	hb    *httpBroker
+}
+
+type httpEvent struct {
+	m   *broker.Message
+	t   string
+	err error
 }
 
 var (
@@ -104,14 +107,14 @@ func newTransport(config *tls.Config) *http.Transport {
 }
 
 func newHttpBroker(opts ...broker.Option) broker.Broker {
-	options := broker.Options{
-		Codec:    json.Marshaler{},
-		Context:  context.TODO(),
-		Registry: mdns.NewRegistry(),
-	}
+	options := broker.NewOptions()
 
 	for _, o := range opts {
 		o(&options)
+	}
+
+	if options.Codec == nil {
+		options.Codec = json.Marshaler{}
 	}
 
 	// set address
@@ -122,7 +125,6 @@ func newHttpBroker(opts ...broker.Option) broker.Broker {
 	}
 
 	h := &httpBroker{
-		id:          uuid.New().String(),
 		address:     addr,
 		opts:        options,
 		r:           options.Registry,
@@ -147,6 +149,22 @@ func newHttpBroker(opts ...broker.Option) broker.Broker {
 	}
 
 	return h
+}
+
+func (h *httpEvent) Ack() error {
+	return nil
+}
+
+func (h *httpEvent) Error() error {
+	return h.err
+}
+
+func (h *httpEvent) Message() *broker.Message {
+	return h.m
+}
+
+func (h *httpEvent) Topic() string {
+	return h.t
 }
 
 func (h *httpSubscriber) Options() broker.SubscribeOptions {
@@ -288,15 +306,16 @@ func (h *httpBroker) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var msg *broker.Message
-	if err = h.opts.Codec.Unmarshal(b, &msg); err != nil {
+	var m *broker.Message
+	if err = h.opts.Codec.Unmarshal(b, &m); err != nil {
 		errr := merr.InternalServerError("go.micro.broker", "Error parsing request body: %v", err)
 		w.WriteHeader(500)
 		w.Write([]byte(errr.Error()))
 		return
 	}
 
-	topic := msg.Header["Micro-Topic"]
+	topic := m.Header["Micro-Topic"]
+	//delete(m.Header, ":topic")
 
 	if len(topic) == 0 {
 		errr := merr.InternalServerError("go.micro.broker", "Topic not found")
@@ -305,6 +324,7 @@ func (h *httpBroker) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	p := &httpEvent{m: m, t: topic}
 	id := req.Form.Get("id")
 
 	//nolint:prealloc
@@ -321,7 +341,7 @@ func (h *httpBroker) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// execute the handler
 	for _, fn := range subs {
-		fn(msg)
+		p.err = fn(p)
 	}
 }
 
@@ -396,13 +416,7 @@ func (h *httpBroker) Connect() error {
 		h.Unlock()
 	}()
 
-	// get registry
-	reg := h.opts.Registry
-	if reg == nil {
-		reg = mdns.NewRegistry()
-	}
-	// set cache
-	h.r = cache.New(reg)
+	h.r = h.opts.Registry
 
 	// set running
 	h.running = true
@@ -419,12 +433,6 @@ func (h *httpBroker) Disconnect() error {
 
 	h.Lock()
 	defer h.Unlock()
-
-	// stop cache
-	rc, ok := h.r.(cache.Cache)
-	if ok {
-		rc.Stop()
-	}
 
 	// exit and return err
 	ch := make(chan error)
@@ -455,23 +463,16 @@ func (h *httpBroker) Init(opts ...broker.Option) error {
 		h.address = h.opts.Addrs[0]
 	}
 
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return err
+	}
 	if len(h.id) == 0 {
-		h.id = "go.micro.http.broker-" + uuid.New().String()
-	}
-
-	// get registry
-	reg := h.opts.Registry
-	if reg == nil {
-		reg = mdns.NewRegistry()
-	}
-
-	// get cache
-	if rc, ok := h.r.(cache.Cache); ok {
-		rc.Stop()
+		h.id = "go.micro.http.broker-" + id.String()
 	}
 
 	// set registry
-	h.r = cache.New(reg)
+	h.r = h.opts.Registry
 
 	// reconfigure tls config
 	if c := h.opts.TLSConfig; c != nil {
@@ -649,7 +650,7 @@ func (h *httpBroker) Subscribe(topic string, handler broker.Handler, opts ...bro
 	}
 
 	// check for queue group or broadcast queue
-	version := options.Queue
+	version := options.Group
 	if len(version) == 0 {
 		version = broadcastVersion
 	}

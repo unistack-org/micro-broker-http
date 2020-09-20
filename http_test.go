@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/micro/go-micro/v3/broker"
-	"github.com/micro/go-micro/v3/registry"
-	"github.com/micro/go-micro/v3/registry/memory"
+	rmemory "github.com/unistack-org/micro-registry-memory"
+	"github.com/unistack-org/micro/v3/broker"
+	"github.com/unistack-org/micro/v3/registry"
 )
 
 var (
@@ -54,7 +54,7 @@ var (
 )
 
 func newTestRegistry() registry.Registry {
-	return memory.NewRegistry(memory.Services(testData))
+	return rmemory.NewRegistry(rmemory.Services(testData))
 }
 
 func sub(be *testing.B, c int) {
@@ -83,15 +83,16 @@ func sub(be *testing.B, c int) {
 	done := make(chan bool, c)
 
 	for i := 0; i < c; i++ {
-		sub, err := b.Subscribe(topic, func(m *broker.Message) error {
+		sub, err := b.Subscribe(topic, func(p broker.Event) error {
 			done <- true
+			m := p.Message()
 
 			if string(m.Body) != string(msg.Body) {
 				be.Fatalf("Unexpected msg %s, expected %s", string(m.Body), string(msg.Body))
 			}
 
 			return nil
-		}, broker.Queue("shared"))
+		}, broker.SubscribeGroup("shared"))
 		if err != nil {
 			be.Fatalf("Unexpected subscribe error: %v", err)
 		}
@@ -139,13 +140,14 @@ func pub(be *testing.B, c int) {
 
 	done := make(chan bool, c*4)
 
-	sub, err := b.Subscribe(topic, func(m *broker.Message) error {
+	sub, err := b.Subscribe(topic, func(p broker.Event) error {
 		done <- true
+		m := p.Message()
 		if string(m.Body) != string(msg.Body) {
 			be.Fatalf("Unexpected msg %s, expected %s", string(m.Body), string(msg.Body))
 		}
 		return nil
-	}, broker.Queue("shared"))
+	}, broker.SubscribeGroup("shared"))
 	if err != nil {
 		be.Fatalf("Unexpected subscribe error: %v", err)
 	}
@@ -206,7 +208,8 @@ func TestBroker(t *testing.T) {
 
 	done := make(chan bool)
 
-	sub, err := b.Subscribe("test", func(m *broker.Message) error {
+	sub, err := b.Subscribe("test", func(p broker.Event) error {
+		m := p.Message()
 
 		if string(m.Body) != string(msg.Body) {
 			t.Fatalf("Unexpected msg %s, expected %s", string(m.Body), string(msg.Body))
@@ -254,8 +257,10 @@ func TestConcurrentSubBroker(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for i := 0; i < 10; i++ {
-		sub, err := b.Subscribe("test", func(m *broker.Message) error {
+		sub, err := b.Subscribe("test", func(p broker.Event) error {
 			defer wg.Done()
+
+			m := p.Message()
 
 			if string(m.Body) != string(msg.Body) {
 				t.Fatalf("Unexpected msg %s, expected %s", string(m.Body), string(msg.Body))
@@ -307,8 +312,10 @@ func TestConcurrentPubBroker(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	sub, err := b.Subscribe("test", func(m *broker.Message) error {
+	sub, err := b.Subscribe("test", func(p broker.Event) error {
 		defer wg.Done()
+
+		m := p.Message()
 
 		if string(m.Body) != string(msg.Body) {
 			t.Fatalf("Unexpected msg %s, expected %s", string(m.Body), string(msg.Body))
