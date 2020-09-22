@@ -4,7 +4,6 @@ package http
 import (
 	"bytes"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -140,7 +139,7 @@ func newHttpBroker(opts ...broker.Option) broker.Broker {
 
 	// get optional handlers
 	if h.opts.Context != nil {
-		handlers, ok := h.opts.Context.Value("http_handlers").(map[string]http.Handler)
+		handlers, ok := h.opts.Context.Value(httpHandlersKey{}).(map[string]http.Handler)
 		if ok {
 			for pattern, handler := range handlers {
 				h.mux.Handle(pattern, handler)
@@ -448,7 +447,7 @@ func (h *httpBroker) Init(opts ...broker.Option) error {
 	h.RLock()
 	if h.running {
 		h.RUnlock()
-		return errors.New("cannot init while connected")
+		return fmt.Errorf("cannot init while connected")
 	}
 	h.RUnlock()
 
