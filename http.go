@@ -3,6 +3,7 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -174,8 +175,8 @@ func (h *httpSubscriber) Topic() string {
 	return h.topic
 }
 
-func (h *httpSubscriber) Unsubscribe() error {
-	return h.hb.unsubscribe(h)
+func (h *httpSubscriber) Unsubscribe(ctx context.Context) error {
+	return h.hb.unsubscribe(ctx, h)
 }
 
 func (h *httpBroker) saveMessage(topic string, msg []byte) {
@@ -221,7 +222,7 @@ func (h *httpBroker) getMessage(topic string, num int) [][]byte {
 	return c
 }
 
-func (h *httpBroker) subscribe(s *httpSubscriber) error {
+func (h *httpBroker) subscribe(ctx context.Context, s *httpSubscriber) error {
 	h.Lock()
 	defer h.Unlock()
 
@@ -233,7 +234,7 @@ func (h *httpBroker) subscribe(s *httpSubscriber) error {
 	return nil
 }
 
-func (h *httpBroker) unsubscribe(s *httpSubscriber) error {
+func (h *httpBroker) unsubscribe(ctx context.Context, s *httpSubscriber) error {
 	h.Lock()
 	defer h.Unlock()
 
@@ -350,7 +351,7 @@ func (h *httpBroker) Address() string {
 	return h.address
 }
 
-func (h *httpBroker) Connect() error {
+func (h *httpBroker) Connect(ctx context.Context) error {
 	h.RLock()
 	if h.running {
 		h.RUnlock()
@@ -422,7 +423,7 @@ func (h *httpBroker) Connect() error {
 	return nil
 }
 
-func (h *httpBroker) Disconnect() error {
+func (h *httpBroker) Disconnect(ctx context.Context) error {
 	h.RLock()
 	if !h.running {
 		h.RUnlock()
@@ -487,7 +488,7 @@ func (h *httpBroker) Options() broker.Options {
 	return h.opts
 }
 
-func (h *httpBroker) Publish(topic string, msg *broker.Message, opts ...broker.PublishOption) error {
+func (h *httpBroker) Publish(ctx context.Context, topic string, msg *broker.Message, opts ...broker.PublishOption) error {
 	// create the message first
 	m := &broker.Message{
 		Header: make(map[string]string),
@@ -615,7 +616,7 @@ func (h *httpBroker) Publish(topic string, msg *broker.Message, opts ...broker.P
 	return nil
 }
 
-func (h *httpBroker) Subscribe(topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (h *httpBroker) Subscribe(ctx context.Context, topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
 	var err error
 	var host, port string
 	options := broker.NewSubscribeOptions(opts...)
@@ -671,7 +672,7 @@ func (h *httpBroker) Subscribe(topic string, handler broker.Handler, opts ...bro
 	}
 
 	// subscribe now
-	if err := h.subscribe(subscriber); err != nil {
+	if err := h.subscribe(ctx, subscriber); err != nil {
 		return nil, err
 	}
 
