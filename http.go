@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	json "github.com/unistack-org/micro-codec-json"
 	"github.com/unistack-org/micro/v3/broker"
-	"github.com/unistack-org/micro/v3/codec/json"
 	merr "github.com/unistack-org/micro/v3/errors"
 	"github.com/unistack-org/micro/v3/registry"
 	maddr "github.com/unistack-org/micro/v3/util/addr"
@@ -226,7 +226,7 @@ func (h *httpBroker) subscribe(ctx context.Context, s *httpSubscriber) error {
 	h.Lock()
 	defer h.Unlock()
 
-	if err := h.r.Register(s.svc, registry.RegisterTTL(registerTTL)); err != nil {
+	if err := h.r.Register(ctx, s.svc, registry.RegisterTTL(registerTTL)); err != nil {
 		return err
 	}
 
@@ -245,7 +245,7 @@ func (h *httpBroker) unsubscribe(ctx context.Context, s *httpSubscriber) error {
 	for _, sub := range h.subscribers[s.topic] {
 		// deregister and skip forward
 		if sub == s {
-			_ = h.r.Deregister(sub.svc)
+			_ = h.r.Deregister(ctx, sub.svc)
 			continue
 		}
 		// keep subscriber
@@ -269,7 +269,7 @@ func (h *httpBroker) run(l net.Listener) {
 			h.RLock()
 			for _, subs := range h.subscribers {
 				for _, sub := range subs {
-					_ = h.r.Register(sub.svc, registry.RegisterTTL(registerTTL))
+					_ = h.r.Register(h.opts.Context, sub.svc, registry.RegisterTTL(registerTTL))
 				}
 			}
 			h.RUnlock()
@@ -279,7 +279,7 @@ func (h *httpBroker) run(l net.Listener) {
 			h.RLock()
 			for _, subs := range h.subscribers {
 				for _, sub := range subs {
-					_ = h.r.Deregister(sub.svc)
+					_ = h.r.Deregister(h.opts.Context, sub.svc)
 				}
 			}
 			h.RUnlock()
@@ -512,7 +512,7 @@ func (h *httpBroker) Publish(ctx context.Context, topic string, msg *broker.Mess
 
 	// now attempt to get the service
 	h.RLock()
-	s, err := h.r.GetService(serviceName)
+	s, err := h.r.GetService(ctx, serviceName)
 	if err != nil {
 		h.RUnlock()
 		return err
