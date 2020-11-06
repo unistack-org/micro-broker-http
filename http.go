@@ -23,7 +23,6 @@ import (
 	"github.com/unistack-org/micro/v3/registry"
 	maddr "github.com/unistack-org/micro/v3/util/addr"
 	mnet "github.com/unistack-org/micro/v3/util/net"
-	mls "github.com/unistack-org/micro/v3/util/tls"
 	"golang.org/x/net/http2"
 )
 
@@ -365,30 +364,11 @@ func (h *httpBroker) Connect(ctx context.Context) error {
 	var l net.Listener
 	var err error
 
-	if h.opts.Secure || h.opts.TLSConfig != nil {
-		config := h.opts.TLSConfig
-
+	if h.opts.Secure && h.opts.TLSConfig == nil {
+		return fmt.Errorf("passed secure communication but *tls.Config is nil")
+	} else if h.opts.Secure && h.opts.TLSConfig != nil {
 		fn := func(addr string) (net.Listener, error) {
-			if config == nil {
-				hosts := []string{addr}
-
-				// check if its a valid host:port
-				if host, _, err := net.SplitHostPort(addr); err == nil {
-					if len(host) == 0 {
-						hosts = maddr.IPs()
-					} else {
-						hosts = []string{host}
-					}
-				}
-
-				// generate a certificate
-				cert, err := mls.Certificate(hosts...)
-				if err != nil {
-					return nil, err
-				}
-				config = &tls.Config{Certificates: []tls.Certificate{cert}}
-			}
-			return tls.Listen("tcp", addr, config)
+			return tls.Listen("tcp", addr, h.opts.TLSConfig)
 		}
 
 		l, err = mnet.Listen(h.address, fn)
