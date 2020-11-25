@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	json "github.com/unistack-org/micro-codec-json"
 	"github.com/unistack-org/micro/v3/broker"
 	merr "github.com/unistack-org/micro/v3/errors"
 	"github.com/unistack-org/micro/v3/registry"
@@ -106,15 +105,7 @@ func newTransport(config *tls.Config) *http.Transport {
 }
 
 func newHttpBroker(opts ...broker.Option) broker.Broker {
-	options := broker.NewOptions()
-
-	for _, o := range opts {
-		o(&options)
-	}
-
-	if options.Codec == nil {
-		options.Codec = json.Marshaler{}
-	}
+	options := broker.NewOptions(opts...)
 
 	// set address
 	addr := DefaultAddress
