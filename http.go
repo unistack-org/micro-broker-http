@@ -19,7 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/unistack-org/micro/v3/broker"
 	merr "github.com/unistack-org/micro/v3/errors"
-	"github.com/unistack-org/micro/v3/registry"
+	"github.com/unistack-org/micro/v3/register"
 	maddr "github.com/unistack-org/micro/v3/util/addr"
 	mnet "github.com/unistack-org/micro/v3/util/net"
 	"golang.org/x/net/http2"
@@ -34,7 +34,7 @@ type httpBroker struct {
 	mux *http.ServeMux
 
 	c *http.Client
-	r registry.Registry
+	r register.Register
 
 	sync.RWMutex
 	subscribers map[string][]*httpSubscriber
@@ -51,7 +51,7 @@ type httpSubscriber struct {
 	id    string
 	topic string
 	fn    broker.Handler
-	svc   *registry.Service
+	svc   *register.Service
 	hb    *httpBroker
 }
 
@@ -102,43 +102,6 @@ func newTransport(config *tls.Config) *http.Transport {
 	http2.ConfigureTransport(t)
 
 	return t
-}
-
-func newHttpBroker(opts ...broker.Option) broker.Broker {
-	options := broker.NewOptions(opts...)
-
-	// set address
-	addr := DefaultAddress
-
-	if len(options.Addrs) > 0 && len(options.Addrs[0]) > 0 {
-		addr = options.Addrs[0]
-	}
-
-	h := &httpBroker{
-		address:     addr,
-		opts:        options,
-		r:           options.Registry,
-		c:           &http.Client{Transport: newTransport(options.TLSConfig)},
-		subscribers: make(map[string][]*httpSubscriber),
-		exit:        make(chan chan error),
-		mux:         http.NewServeMux(),
-		inbox:       make(map[string][][]byte),
-	}
-
-	// specify the message handler
-	h.mux.Handle(DefaultPath, h)
-
-	// get optional handlers
-	if h.opts.Context != nil {
-		handlers, ok := h.opts.Context.Value(httpHandlersKey{}).(map[string]http.Handler)
-		if ok {
-			for pattern, handler := range handlers {
-				h.mux.Handle(pattern, handler)
-			}
-		}
-	}
-
-	return h
 }
 
 func (h *httpEvent) Ack() error {
@@ -216,7 +179,7 @@ func (h *httpBroker) subscribe(ctx context.Context, s *httpSubscriber) error {
 	h.Lock()
 	defer h.Unlock()
 
-	if err := h.r.Register(ctx, s.svc, registry.RegisterTTL(registerTTL)); err != nil {
+	if err := h.r.Register(ctx, s.svc, register.RegisterTTL(registerTTL)); err != nil {
 		return err
 	}
 
@@ -259,7 +222,7 @@ func (h *httpBroker) run(l net.Listener) {
 			h.RLock()
 			for _, subs := range h.subscribers {
 				for _, sub := range subs {
-					_ = h.r.Register(h.opts.Context, sub.svc, registry.RegisterTTL(registerTTL))
+					_ = h.r.Register(h.opts.Context, sub.svc, register.RegisterTTL(registerTTL))
 				}
 			}
 			h.RUnlock()
@@ -355,9 +318,7 @@ func (h *httpBroker) Connect(ctx context.Context) error {
 	var l net.Listener
 	var err error
 
-	if h.opts.Secure && h.opts.TLSConfig == nil {
-		return fmt.Errorf("passed secure communication but *tls.Config is nil")
-	} else if h.opts.Secure && h.opts.TLSConfig != nil {
+	if h.opts.TLSConfig != nil {
 		fn := func(addr string) (net.Listener, error) {
 			return tls.Listen("tcp", addr, h.opts.TLSConfig)
 		}
@@ -387,7 +348,7 @@ func (h *httpBroker) Connect(ctx context.Context) error {
 		h.Unlock()
 	}()
 
-	h.r = h.opts.Registry
+	h.r = h.opts.Register
 
 	// set running
 	h.running = true
@@ -442,8 +403,8 @@ func (h *httpBroker) Init(opts ...broker.Option) error {
 		h.id = "go.micro.http.broker-" + id.String()
 	}
 
-	// set registry
-	h.r = h.opts.Registry
+	// set register
+	h.r = h.opts.Register
 
 	// reconfigure tls config
 	if c := h.opts.TLSConfig; c != nil {
@@ -483,14 +444,14 @@ func (h *httpBroker) Publish(ctx context.Context, topic string, msg *broker.Mess
 
 	// now attempt to get the service
 	h.RLock()
-	s, err := h.r.GetService(ctx, serviceName)
+	s, err := h.r.LookupService(ctx, serviceName)
 	if err != nil {
 		h.RUnlock()
 		return err
 	}
 	h.RUnlock()
 
-	pub := func(node *registry.Node, t string, b []byte) error {
+	pub := func(node *register.Node, t string, b []byte) error {
 		scheme := "http"
 
 		// check if secure is added in metadata
@@ -513,9 +474,9 @@ func (h *httpBroker) Publish(ctx context.Context, topic string, msg *broker.Mess
 		return nil
 	}
 
-	srv := func(s []*registry.Service, b []byte) {
+	srv := func(s []*register.Service, b []byte) {
 		for _, service := range s {
-			var nodes []*registry.Node
+			var nodes []*register.Node
 
 			for _, node := range service.Nodes {
 				// only use nodes tagged with broker http
@@ -605,12 +566,12 @@ func (h *httpBroker) Subscribe(ctx context.Context, topic string, handler broker
 
 	var secure bool
 
-	if h.opts.Secure || h.opts.TLSConfig != nil {
+	if h.opts.TLSConfig != nil {
 		secure = true
 	}
 
 	// register service
-	node := &registry.Node{
+	node := &register.Node{
 		Id:      topic + "-" + h.id,
 		Address: mnet.HostPort(addr, port),
 		Metadata: map[string]string{
@@ -626,10 +587,10 @@ func (h *httpBroker) Subscribe(ctx context.Context, topic string, handler broker
 		version = broadcastVersion
 	}
 
-	service := &registry.Service{
+	service := &register.Service{
 		Name:    serviceName,
 		Version: version,
-		Nodes:   []*registry.Node{node},
+		Nodes:   []*register.Node{node},
 	}
 
 	// generate subscriber
@@ -655,7 +616,44 @@ func (h *httpBroker) String() string {
 	return "http"
 }
 
+func (h *httpBroker) Name() string {
+	return h.opts.Name
+}
+
 // NewBroker returns a new http broker
 func NewBroker(opts ...broker.Option) broker.Broker {
-	return newHttpBroker(opts...)
+	options := broker.NewOptions(opts...)
+
+	// set address
+	addr := DefaultAddress
+
+	if len(options.Addrs) > 0 && len(options.Addrs[0]) > 0 {
+		addr = options.Addrs[0]
+	}
+
+	h := &httpBroker{
+		address:     addr,
+		opts:        options,
+		r:           options.Register,
+		c:           &http.Client{Transport: newTransport(options.TLSConfig)},
+		subscribers: make(map[string][]*httpSubscriber),
+		exit:        make(chan chan error),
+		mux:         http.NewServeMux(),
+		inbox:       make(map[string][][]byte),
+	}
+
+	// specify the message handler
+	h.mux.Handle(DefaultPath, h)
+
+	// get optional handlers
+	if h.opts.Context != nil {
+		handlers, ok := h.opts.Context.Value(httpHandlersKey{}).(map[string]http.Handler)
+		if ok {
+			for pattern, handler := range handlers {
+				h.mux.Handle(pattern, handler)
+			}
+		}
+	}
+
+	return h
 }
