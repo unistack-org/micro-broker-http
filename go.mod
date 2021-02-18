@@ -4,6 +4,6 @@ go 1.15
 
 require (
 	github.com/google/uuid v1.2.0
-	github.com/unistack-org/micro/v3 v3.2.11
+	github.com/unistack-org/micro/v3 v3.2.14
 	golang.org/x/net v0.0.0-20210119194325-5f4716e94777
 )
